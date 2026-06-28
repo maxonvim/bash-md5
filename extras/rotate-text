@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+text='hit that subscribe button        '
+len=${#text}
+
+while true; do
+	for ((i = 0; i < len; i++)); do
+		s0=${text:i}
+		s1=${text:0:i}
+
+		printf '\r%s' "$s0$s1"
+		sleep .1
+	done
+done

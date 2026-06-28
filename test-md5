@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+declare -A files=(
+	[files/empty.txt]='d41d8cd98f00b204e9800998ecf8427e'
+	[files/hello.txt]='b1946ac92492d2347c6235b4d2611184'
+	[files/random_4kb.bin]='9f40725ceb305d49f294c89fd36a808a'
+)
+
+code=0
+for file in "${!files[@]}"; do
+	want=${files[$file]}
+	have=$(./md5 "$file")
+
+	echo -n "checking $file is $want... "
+
+	if [[ "$want" == "$have" ]]; then
+		echo 'ok'
+	else
+		echo "fail! we have '$have'"
+		code=1
+	fi
+done
+
+exit "$code"

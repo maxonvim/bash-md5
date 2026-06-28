@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+#
+# Pure bash implementation of the md5 checksum algorithm
+#
+# Usage
+#
+#   $ ./md5 file.txt
+#   $ ./md5 < file.bin
+#
+# # Created
+# Author: Dave Eddy <ysap@daveeddy.com>
+# Date: June 24, 2026
+# License: MIT
+#
+# # Contributors
+# - Dave Eddy <ysap@daveeddy.com>
+
+LC_ALL=C
+
+U32_MASK=0xffffffff
+
+block=()
+byte_count=0
+
+s=(
+	7 12 17 22  7 12 17 22  7 12 17 22  7 12 17 22
+	5  9 14 20  5  9 14 20  5  9 14 20  5  9 14 20
+	4 11 16 23  4 11 16 23  4 11 16 23  4 11 16 23
+	6 10 15 21  6 10 15 21  6 10 15 21  6 10 15 21
+)
+
+K=(
+	0xd76aa478 0xe8c7b756 0x242070db 0xc1bdceee
+	0xf57c0faf 0x4787c62a 0xa8304613 0xfd469501
+	0x698098d8 0x8b44f7af 0xffff5bb1 0x895cd7be
+	0x6b901122 0xfd987193 0xa679438e 0x49b40821
+	0xf61e2562 0xc040b340 0x265e5a51 0xe9b6c7aa
+	0xd62f105d 0x02441453 0xd8a1e681 0xe7d3fbc8
+	0x21e1cde6 0xc33707d6 0xf4d50d87 0x455a14ed
+	0xa9e3e905 0xfcefa3f8 0x676f02d9 0x8d2a4c8a
+	0xfffa3942 0x8771f681 0x6d9d6122 0xfde5380c
+	0xa4beea44 0x4bdecfa9 0xf6bb4b60 0xbebfbc70
+	0x289b7ec6 0xeaa127fa 0xd4ef3085 0x04881d05
+	0xd9d4d039 0xe6db99e5 0x1fa27cf8 0xc4ac5665
+	0xf4292244 0x432aff97 0xab9423a7 0xfc93a039
+	0x655b59c3 0x8f0ccc92 0xffeff47d 0x85845dd1
+	0x6fa87e4f 0xfe2ce6e0 0xa3014314 0x4e0811a1
+	0xf7537e82 0xbd3af235 0x2ad7d2bb 0xeb86d391
+)
+
+a0=0x67452301
+b0=0xefcdab89
+c0=0x98badcfe
+d0=0x10325476
+
+process-block() {
+	local M=()
+
+	# break chunk into sixteen 32-bit words M[j], 0 ≤ j ≤ 15
+	local i j
+	for ((i = 0; i < 16; i++)); do
+		j=$((i * 4))
+		M[i]=$((block[j] | block[j+1] << 8 |
+			block[j+2] << 16 | block[j+3] << 24))
+	done
+
+	# Initialize hash value for this chunk:
+	local A=$a0
+	local B=$b0
+	local C=$c0
+	local D=$d0
+
+	# Main loop:
+	for ((i = 0; i < 64; i++)); do
+		local F g
+
+		if ((i < 16)); then
+			F=$(( (B & C) | ((~B) & D) ))
+			g=$i
+		elif ((i < 32)); then
+			F=$(( (D & B) | ((~D) & C) ))
+			g=$(( (5 * i + 1) % 16 ))
+		elif ((i < 48)); then
+			F=$(( B ^ C ^ D ))
+			g=$(( (3 * i + 5) % 16 ))
+		else
+			F=$((C ^ (B | ~D)))
+			g=$(((7 * i) % 16))
+		fi
+
+		F=$(( (F + A + K[i] + M[g]) & U32_MASK ))
+		A=$D
+		D=$C
+		C=$B
+		local rotated=$(( (F << s[i] | (F >> (32 - s[i]))) & U32_MASK))
+		B=$(( (B + rotated) & U32_MASK ))
+	done
+
+	a0=$(( (a0 + A) & U32_MASK ))
+	b0=$(( (b0 + B) & U32_MASK ))
+	c0=$(( (c0 + C) & U32_MASK ))
+	d0=$(( (d0 + D) & U32_MASK ))
+}
+
+process-byte() {
+	local byte=$1
+
+	debug "process-byte($byte)"
+
+	# store the byte
+	block+=("$byte")
+
+	# check if we have a full block ready for processing
+	if ((${#block[@]} == 64)); then
+		process-block
+		block=()
+	fi
+}
+
+process-input() {
+	local chunk i c
+
+	while true; do
+		IFS= read -r -d '' -n 4096 chunk
+		local code=$?
+		local n=${#chunk}
+
+		debug "read $n bytes (code=$code)"
+
+		# loop the chunk and process byte-by-byte
+		for ((i = 0; i < n; i++)); do
+			c=${chunk:i:1}
+			printf -v c '%d' "'$c"
+			process-byte "$c"
+			((byte_count++))
+		done
+
+		# `read` failed - so we are done processing
+		if ((code != 0)); then
+			break
+		fi
+
+		# check for nul
+		if ((n < 4096)); then
+			process-byte 0
+			((byte_count++))
+		fi
+	done
+
+	# we've read the entire message - now we have to finalize it by padding
+	# it and appending the length
+
+	# pad it with 1 and then a bunch of 0s
+	process-byte 0x80
+	while (( ${#block[@]} != 56 )); do
+		process-byte 0
+	done
+
+	# append original length in bits mod 2^64 to message
+	# turn the byte length into 2 numbers - high bits and low bits
+	local low_bits=$(( (byte_count << 3) & U32_MASK))
+	local high_bits=$(( (byte_count >> (32 - 3)) & U32_MASK ))
+
+	# encode the full 64bit int (bits length) as little endian
+	local byte
+	for ((i = 0; i < 4; i++)); do
+		byte=$(( low_bits >> (i * 8) & 0xff ))
+		debug "low_bits[$i]=$byte"
+		process-byte "$byte"
+	done
+	for ((i = 0; i < 4; i++)); do
+		byte=$(( high_bits >> (i * 8) & 0xff ))
+		debug "high_bits[$i]=$byte"
+		process-byte "$byte"
+	done
+
+	# assert things are correct
+	if (( ${#block[@]} != 0 )); then
+		echo 'uh oh! something went wrong' >&2
+		exit 1
+	fi
+}
+
+debug() {
+	if [[ -n $DEBUG ]]; then
+		echo '[DEBUG]' "$@" >&2
+	fi
+	return 0
+}
+
+print-hash() {
+	# somehow print a0 + b0 + c0 + d0
+	debug "a0=$a0 b0=$b0 c0=$c0 d0=$d0"
+
+	local word i byte
+	for word in "$a0" "$b0" "$c0" "$d0"; do
+		for ((i = 0; i < 4; i++)); do
+			byte=$(( word >> (i * 8) & 0xff ))
+			printf '%02x' "$byte"
+		done
+	done
+	echo
+}
+
+main() {
+	local file=$1
+
+	if [[ -n $file ]]; then
+		debug "reading data from file: $file"
+		process-input < "$file"
+	else
+		debug "reading data from stdin"
+		process-input
+	fi
+
+	print-hash
+}
+
+main "$@"
