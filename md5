@@ -207,7 +207,7 @@ main() {
 
 	if [[ -n $file ]]; then
 		debug "reading data from file: $file"
-		process-input < "$file"
+		process-input < "$file" || return 1
 	else
 		debug "reading data from stdin"
 		process-input
