@@ -1,218 +1,260 @@
 #!/usr/bin/env bash
 #
-# Pure bash implementation of the md5 checksum algorithm
+# Pure Bash implementation of MD5, optimized for throughput.
 #
-# Usage
+# Usage:
+#   ./md5 file.txt
+#   ./md5 < file.bin
 #
-#   $ ./md5 file.txt
-#   $ ./md5 < file.bin
-#
-# # Created
 # Author: Dave Eddy <ysap@daveeddy.com>
-# Date: June 24, 2026
+# Contributors: barkermn01, qjtdsqqm94akkyysgjdqo3hx1jn6l17,
+#               Guiorgy, ghoul-the-legend
 # License: MIT
-#
-# # Contributors
-# - Dave Eddy <ysap@daveeddy.com>
 
 LC_ALL=C
 
-U32_MASK=0xffffffff
+# Bash cannot store NUL bytes in variables. read therefore uses NUL as its
+# delimiter and each successful short read contributes the omitted NUL.
 
-block=()
+a0=1732584193
+b0=4023233417
+c0=2562383102
+d0=271733878
 byte_count=0
 
-s=(
-	7 12 17 22  7 12 17 22  7 12 17 22  7 12 17 22
-	5  9 14 20  5  9 14 20  5  9 14 20  5  9 14 20
-	4 11 16 23  4 11 16 23  4 11 16 23  4 11 16 23
-	6 10 15 21  6 10 15 21  6 10 15 21  6 10 15 21
-)
+m0=0 m1=0 m2=0 m3=0 m4=0 m5=0 m6=0 m7=0
+m8=0 m9=0 m10=0 m11=0 m12=0 m13=0 m14=0 m15=0
+A=0 B=0 C=0 D=0 F=0
 
-K=(
-	0xd76aa478 0xe8c7b756 0x242070db 0xc1bdceee
-	0xf57c0faf 0x4787c62a 0xa8304613 0xfd469501
-	0x698098d8 0x8b44f7af 0xffff5bb1 0x895cd7be
-	0x6b901122 0xfd987193 0xa679438e 0x49b40821
-	0xf61e2562 0xc040b340 0x265e5a51 0xe9b6c7aa
-	0xd62f105d 0x02441453 0xd8a1e681 0xe7d3fbc8
-	0x21e1cde6 0xc33707d6 0xf4d50d87 0x455a14ed
-	0xa9e3e905 0xfcefa3f8 0x676f02d9 0x8d2a4c8a
-	0xfffa3942 0x8771f681 0x6d9d6122 0xfde5380c
-	0xa4beea44 0x4bdecfa9 0xf6bb4b60 0xbebfbc70
-	0x289b7ec6 0xeaa127fa 0xd4ef3085 0x04881d05
-	0xd9d4d039 0xe6db99e5 0x1fa27cf8 0xc4ac5665
-	0xf4292244 0x432aff97 0xab9423a7 0xfc93a039
-	0x655b59c3 0x8f0ccc92 0xffeff47d 0x85845dd1
-	0x6fa87e4f 0xfe2ce6e0 0xa3014314 0x4e0811a1
-	0xf7537e82 0xbd3af235 0x2ad7d2bb 0xeb86d391
-)
-
-a0=0x67452301
-b0=0xefcdab89
-c0=0x98badcfe
-d0=0x10325476
-
-process-block() {
-	local M=()
-
-	# break chunk into sixteen 32-bit words M[j], 0 ≤ j ≤ 15
-	local i j
-	for ((i = 0; i < 16; i++)); do
-		j=$((i * 4))
-		M[i]=$((block[j] | block[j+1] << 8 |
-			block[j+2] << 16 | block[j+3] << 24))
-	done
-
-	# Initialize hash value for this chunk:
-	local A=$a0
-	local B=$b0
-	local C=$c0
-	local D=$d0
-
-	# Main loop:
-	for ((i = 0; i < 64; i++)); do
-		local F g
-
-		if ((i < 16)); then
-			F=$(( (B & C) | ((~B) & D) ))
-			g=$i
-		elif ((i < 32)); then
-			F=$(( (D & B) | ((~D) & C) ))
-			g=$(( (5 * i + 1) % 16 ))
-		elif ((i < 48)); then
-			F=$(( B ^ C ^ D ))
-			g=$(( (3 * i + 5) % 16 ))
-		else
-			F=$((C ^ (B | ~D)))
-			g=$(((7 * i) % 16))
-		fi
-
-		F=$(( (F + A + K[i] + M[g]) & U32_MASK ))
-		A=$D
-		D=$C
-		C=$B
-		local rotated=$(( (F << s[i] | (F >> (32 - s[i]))) & U32_MASK))
-		B=$(( (B + rotated) & U32_MASK ))
-	done
-
-	a0=$(( (a0 + A) & U32_MASK ))
-	b0=$(( (b0 + B) & U32_MASK ))
-	c0=$(( (c0 + C) & U32_MASK ))
-	d0=$(( (d0 + D) & U32_MASK ))
+debug-func() {
+	printf '[DEBUG] %s\n' "$*" >&2
 }
 
-process-byte() {
-	local byte=$1
+shopt -s expand_aliases
+if [[ -n $DEBUG ]]; then
+	alias debug=debug-func
+else
+	alias debug='#'
+fi
 
-	debug "process-byte($byte)"
+# The message words are scalars and all 64 rounds are one arithmetic command.
+# Cycling A/D/C/B eliminates register-shuffle assignments between rounds.
+process-block() {
+	((
+		A=a0, B=b0, C=c0, D=d0,
 
-	# store the byte
-	block+=("$byte")
+		F=(((B&C)|(~B&D))+A+3614090360+m0)&4294967295, A=(B+(F<<7|F>>25))&4294967295,
+		F=(((A&B)|(~A&C))+D+3905402710+m1)&4294967295, D=(A+(F<<12|F>>20))&4294967295,
+		F=(((D&A)|(~D&B))+C+606105819+m2)&4294967295, C=(D+(F<<17|F>>15))&4294967295,
+		F=(((C&D)|(~C&A))+B+3250441966+m3)&4294967295, B=(C+(F<<22|F>>10))&4294967295,
+		F=(((B&C)|(~B&D))+A+4118548399+m4)&4294967295, A=(B+(F<<7|F>>25))&4294967295,
+		F=(((A&B)|(~A&C))+D+1200080426+m5)&4294967295, D=(A+(F<<12|F>>20))&4294967295,
+		F=(((D&A)|(~D&B))+C+2821735955+m6)&4294967295, C=(D+(F<<17|F>>15))&4294967295,
+		F=(((C&D)|(~C&A))+B+4249261313+m7)&4294967295, B=(C+(F<<22|F>>10))&4294967295,
+		F=(((B&C)|(~B&D))+A+1770035416+m8)&4294967295, A=(B+(F<<7|F>>25))&4294967295,
+		F=(((A&B)|(~A&C))+D+2336552879+m9)&4294967295, D=(A+(F<<12|F>>20))&4294967295,
+		F=(((D&A)|(~D&B))+C+4294925233+m10)&4294967295, C=(D+(F<<17|F>>15))&4294967295,
+		F=(((C&D)|(~C&A))+B+2304563134+m11)&4294967295, B=(C+(F<<22|F>>10))&4294967295,
+		F=(((B&C)|(~B&D))+A+1804603682+m12)&4294967295, A=(B+(F<<7|F>>25))&4294967295,
+		F=(((A&B)|(~A&C))+D+4254626195+m13)&4294967295, D=(A+(F<<12|F>>20))&4294967295,
+		F=(((D&A)|(~D&B))+C+2792965006+m14)&4294967295, C=(D+(F<<17|F>>15))&4294967295,
+		F=(((C&D)|(~C&A))+B+1236535329+m15)&4294967295, B=(C+(F<<22|F>>10))&4294967295,
 
-	# check if we have a full block ready for processing
-	if ((${#block[@]} == 64)); then
-		process-block
-		block=()
-	fi
+		F=(((D&B)|(~D&C))+A+4129170786+m1)&4294967295, A=(B+(F<<5|F>>27))&4294967295,
+		F=(((C&A)|(~C&B))+D+3225465664+m6)&4294967295, D=(A+(F<<9|F>>23))&4294967295,
+		F=(((B&D)|(~B&A))+C+643717713+m11)&4294967295, C=(D+(F<<14|F>>18))&4294967295,
+		F=(((A&C)|(~A&D))+B+3921069994+m0)&4294967295, B=(C+(F<<20|F>>12))&4294967295,
+		F=(((D&B)|(~D&C))+A+3593408605+m5)&4294967295, A=(B+(F<<5|F>>27))&4294967295,
+		F=(((C&A)|(~C&B))+D+38016083+m10)&4294967295, D=(A+(F<<9|F>>23))&4294967295,
+		F=(((B&D)|(~B&A))+C+3634488961+m15)&4294967295, C=(D+(F<<14|F>>18))&4294967295,
+		F=(((A&C)|(~A&D))+B+3889429448+m4)&4294967295, B=(C+(F<<20|F>>12))&4294967295,
+		F=(((D&B)|(~D&C))+A+568446438+m9)&4294967295, A=(B+(F<<5|F>>27))&4294967295,
+		F=(((C&A)|(~C&B))+D+3275163606+m14)&4294967295, D=(A+(F<<9|F>>23))&4294967295,
+		F=(((B&D)|(~B&A))+C+4107603335+m3)&4294967295, C=(D+(F<<14|F>>18))&4294967295,
+		F=(((A&C)|(~A&D))+B+1163531501+m8)&4294967295, B=(C+(F<<20|F>>12))&4294967295,
+		F=(((D&B)|(~D&C))+A+2850285829+m13)&4294967295, A=(B+(F<<5|F>>27))&4294967295,
+		F=(((C&A)|(~C&B))+D+4243563512+m2)&4294967295, D=(A+(F<<9|F>>23))&4294967295,
+		F=(((B&D)|(~B&A))+C+1735328473+m7)&4294967295, C=(D+(F<<14|F>>18))&4294967295,
+		F=(((A&C)|(~A&D))+B+2368359562+m12)&4294967295, B=(C+(F<<20|F>>12))&4294967295,
+
+		F=((B^C^D)+A+4294588738+m5)&4294967295, A=(B+(F<<4|F>>28))&4294967295,
+		F=((A^B^C)+D+2272392833+m8)&4294967295, D=(A+(F<<11|F>>21))&4294967295,
+		F=((D^A^B)+C+1839030562+m11)&4294967295, C=(D+(F<<16|F>>16))&4294967295,
+		F=((C^D^A)+B+4259657740+m14)&4294967295, B=(C+(F<<23|F>>9))&4294967295,
+		F=((B^C^D)+A+2763975236+m1)&4294967295, A=(B+(F<<4|F>>28))&4294967295,
+		F=((A^B^C)+D+1272893353+m4)&4294967295, D=(A+(F<<11|F>>21))&4294967295,
+		F=((D^A^B)+C+4139469664+m7)&4294967295, C=(D+(F<<16|F>>16))&4294967295,
+		F=((C^D^A)+B+3200236656+m10)&4294967295, B=(C+(F<<23|F>>9))&4294967295,
+		F=((B^C^D)+A+681279174+m13)&4294967295, A=(B+(F<<4|F>>28))&4294967295,
+		F=((A^B^C)+D+3936430074+m0)&4294967295, D=(A+(F<<11|F>>21))&4294967295,
+		F=((D^A^B)+C+3572445317+m3)&4294967295, C=(D+(F<<16|F>>16))&4294967295,
+		F=((C^D^A)+B+76029189+m6)&4294967295, B=(C+(F<<23|F>>9))&4294967295,
+		F=((B^C^D)+A+3654602809+m9)&4294967295, A=(B+(F<<4|F>>28))&4294967295,
+		F=((A^B^C)+D+3873151461+m12)&4294967295, D=(A+(F<<11|F>>21))&4294967295,
+		F=((D^A^B)+C+530742520+m15)&4294967295, C=(D+(F<<16|F>>16))&4294967295,
+		F=((C^D^A)+B+3299628645+m2)&4294967295, B=(C+(F<<23|F>>9))&4294967295,
+
+		F=((C^(B|~D))+A+4096336452+m0)&4294967295, A=(B+(F<<6|F>>26))&4294967295,
+		F=((B^(A|~C))+D+1126891415+m7)&4294967295, D=(A+(F<<10|F>>22))&4294967295,
+		F=((A^(D|~B))+C+2878612391+m14)&4294967295, C=(D+(F<<15|F>>17))&4294967295,
+		F=((D^(C|~A))+B+4237533241+m5)&4294967295, B=(C+(F<<21|F>>11))&4294967295,
+		F=((C^(B|~D))+A+1700485571+m12)&4294967295, A=(B+(F<<6|F>>26))&4294967295,
+		F=((B^(A|~C))+D+2399980690+m3)&4294967295, D=(A+(F<<10|F>>22))&4294967295,
+		F=((A^(D|~B))+C+4293915773+m10)&4294967295, C=(D+(F<<15|F>>17))&4294967295,
+		F=((D^(C|~A))+B+2240044497+m1)&4294967295, B=(C+(F<<21|F>>11))&4294967295,
+		F=((C^(B|~D))+A+1873313359+m8)&4294967295, A=(B+(F<<6|F>>26))&4294967295,
+		F=((B^(A|~C))+D+4264355552+m15)&4294967295, D=(A+(F<<10|F>>22))&4294967295,
+		F=((A^(D|~B))+C+2734768916+m6)&4294967295, C=(D+(F<<15|F>>17))&4294967295,
+		F=((D^(C|~A))+B+1309151649+m13)&4294967295, B=(C+(F<<21|F>>11))&4294967295,
+		F=((C^(B|~D))+A+4149444226+m4)&4294967295, A=(B+(F<<6|F>>26))&4294967295,
+		F=((B^(A|~C))+D+3174756917+m11)&4294967295, D=(A+(F<<10|F>>22))&4294967295,
+		F=((A^(D|~B))+C+718787259+m2)&4294967295, C=(D+(F<<15|F>>17))&4294967295,
+		F=((D^(C|~A))+B+3951481745+m9)&4294967295, B=(C+(F<<21|F>>11))&4294967295,
+
+		a0=(a0+A)&4294967295, b0=(b0+B)&4294967295,
+		c0=(c0+C)&4294967295, d0=(d0+D)&4294967295,
+		1
+	))
+}
+
+# This path only handles a partial block (after NUL or EOF), so clarity here
+# costs nothing in the full-block hot path.
+load-buffer-block() {
+	local o=$1
+	((
+		m0=buffer[o]|buffer[o+1]<<8|buffer[o+2]<<16|buffer[o+3]<<24,
+		m1=buffer[o+4]|buffer[o+5]<<8|buffer[o+6]<<16|buffer[o+7]<<24,
+		m2=buffer[o+8]|buffer[o+9]<<8|buffer[o+10]<<16|buffer[o+11]<<24,
+		m3=buffer[o+12]|buffer[o+13]<<8|buffer[o+14]<<16|buffer[o+15]<<24,
+		m4=buffer[o+16]|buffer[o+17]<<8|buffer[o+18]<<16|buffer[o+19]<<24,
+		m5=buffer[o+20]|buffer[o+21]<<8|buffer[o+22]<<16|buffer[o+23]<<24,
+		m6=buffer[o+24]|buffer[o+25]<<8|buffer[o+26]<<16|buffer[o+27]<<24,
+		m7=buffer[o+28]|buffer[o+29]<<8|buffer[o+30]<<16|buffer[o+31]<<24,
+		m8=buffer[o+32]|buffer[o+33]<<8|buffer[o+34]<<16|buffer[o+35]<<24,
+		m9=buffer[o+36]|buffer[o+37]<<8|buffer[o+38]<<16|buffer[o+39]<<24,
+		m10=buffer[o+40]|buffer[o+41]<<8|buffer[o+42]<<16|buffer[o+43]<<24,
+		m11=buffer[o+44]|buffer[o+45]<<8|buffer[o+46]<<16|buffer[o+47]<<24,
+		m12=buffer[o+48]|buffer[o+49]<<8|buffer[o+50]<<16|buffer[o+51]<<24,
+		m13=buffer[o+52]|buffer[o+53]<<8|buffer[o+54]<<16|buffer[o+55]<<24,
+		m14=buffer[o+56]|buffer[o+57]<<8|buffer[o+58]<<16|buffer[o+59]<<24,
+		m15=buffer[o+60]|buffer[o+61]<<8|buffer[o+62]<<16|buffer[o+63]<<24
+	))
+	process-block
 }
 
 process-input() {
-	local chunk i c
+	local chunk code n pos blk bytes c o low_bits high_bits
+	local -a buffer=()
 
 	while true; do
 		IFS= read -r -d '' -n 4096 chunk
-		local code=$?
-		local n=${#chunk}
-
+		code=$?
+		n=${#chunk}
+		pos=0
 		debug "read $n bytes (code=$code)"
 
-		# loop the chunk and process byte-by-byte
-		for ((i = 0; i < n; i++)); do
-			c=${chunk:i:1}
-			printf -v c '%d' "'$c"
-			process-byte "$c"
-			((byte_count++))
-		done
+		if ((n)); then
+			((byte_count += n))
 
-		# `read` failed - so we are done processing
-		if ((code != 0)); then
-			break
+			while ((${#buffer[@]} && ${#buffer[@]} < 64 && pos < n)); do
+				printf -v c '%d' "'${chunk:pos++:1}"
+				buffer+=("$c")
+			done
+			if ((${#buffer[@]} == 64)); then
+				load-buffer-block 0
+				buffer=()
+			fi
+
+			while ((pos + 64 <= n)); do
+				blk=${chunk:pos:64}
+				((pos += 64))
+				# shellcheck disable=SC2089
+				printf -v bytes '%d ' \
+					"'${blk:0:1}"  "'${blk:1:1}"  "'${blk:2:1}"  "'${blk:3:1}" \
+					"'${blk:4:1}"  "'${blk:5:1}"  "'${blk:6:1}"  "'${blk:7:1}" \
+					"'${blk:8:1}"  "'${blk:9:1}"  "'${blk:10:1}" "'${blk:11:1}" \
+					"'${blk:12:1}" "'${blk:13:1}" "'${blk:14:1}" "'${blk:15:1}" \
+					"'${blk:16:1}" "'${blk:17:1}" "'${blk:18:1}" "'${blk:19:1}" \
+					"'${blk:20:1}" "'${blk:21:1}" "'${blk:22:1}" "'${blk:23:1}" \
+					"'${blk:24:1}" "'${blk:25:1}" "'${blk:26:1}" "'${blk:27:1}" \
+					"'${blk:28:1}" "'${blk:29:1}" "'${blk:30:1}" "'${blk:31:1}" \
+					"'${blk:32:1}" "'${blk:33:1}" "'${blk:34:1}" "'${blk:35:1}" \
+					"'${blk:36:1}" "'${blk:37:1}" "'${blk:38:1}" "'${blk:39:1}" \
+					"'${blk:40:1}" "'${blk:41:1}" "'${blk:42:1}" "'${blk:43:1}" \
+					"'${blk:44:1}" "'${blk:45:1}" "'${blk:46:1}" "'${blk:47:1}" \
+					"'${blk:48:1}" "'${blk:49:1}" "'${blk:50:1}" "'${blk:51:1}" \
+					"'${blk:52:1}" "'${blk:53:1}" "'${blk:54:1}" "'${blk:55:1}" \
+					"'${blk:56:1}" "'${blk:57:1}" "'${blk:58:1}" "'${blk:59:1}" \
+					"'${blk:60:1}" "'${blk:61:1}" "'${blk:62:1}" "'${blk:63:1}"
+				# Intentional splitting of the decimal-only printf output.
+				# shellcheck disable=SC2086,SC2090
+				set -- $bytes
+				((
+					m0=$1|$2<<8|$3<<16|$4<<24, m1=$5|$6<<8|$7<<16|$8<<24,
+					m2=$9|${10}<<8|${11}<<16|${12}<<24, m3=${13}|${14}<<8|${15}<<16|${16}<<24,
+					m4=${17}|${18}<<8|${19}<<16|${20}<<24, m5=${21}|${22}<<8|${23}<<16|${24}<<24,
+					m6=${25}|${26}<<8|${27}<<16|${28}<<24, m7=${29}|${30}<<8|${31}<<16|${32}<<24,
+					m8=${33}|${34}<<8|${35}<<16|${36}<<24, m9=${37}|${38}<<8|${39}<<16|${40}<<24,
+					m10=${41}|${42}<<8|${43}<<16|${44}<<24, m11=${45}|${46}<<8|${47}<<16|${48}<<24,
+					m12=${49}|${50}<<8|${51}<<16|${52}<<24, m13=${53}|${54}<<8|${55}<<16|${56}<<24,
+					m14=${57}|${58}<<8|${59}<<16|${60}<<24, m15=${61}|${62}<<8|${63}<<16|${64}<<24
+				))
+				process-block
+			done
+
+			while ((pos < n)); do
+				printf -v c '%d' "'${chunk:pos++:1}"
+				buffer+=("$c")
+			done
 		fi
 
-		# check for nul
-		if ((n < 4096)); then
-			process-byte 0
+		if ((code == 0 && n < 4096)); then
+			buffer+=(0)
 			((byte_count++))
+			if ((${#buffer[@]} == 64)); then
+				load-buffer-block 0
+				buffer=()
+			fi
 		fi
+
+		((code != 0)) && break
 	done
 
-	# we've read the entire message - now we have to finalize it by padding
-	# it and appending the length
-
-	# pad it with 1 and then a bunch of 0s
-	process-byte 0x80
-	while (( ${#block[@]} != 56 )); do
-		process-byte 0
+	buffer+=(128)
+	while (((${#buffer[@]} & 63) != 56)); do
+		buffer+=(0)
 	done
 
-	# append original length in bits mod 2^64 to message
-	# turn the byte length into 2 numbers - high bits and low bits
-	local low_bits=$(( (byte_count << 3) & U32_MASK))
-	local high_bits=$(( (byte_count >> (32 - 3)) & U32_MASK ))
+	low_bits=$(((byte_count << 3) & 4294967295))
+	high_bits=$(((byte_count >> 29) & 4294967295))
+	buffer+=(
+		$((low_bits & 255)) $((low_bits >> 8 & 255))
+		$((low_bits >> 16 & 255)) $((low_bits >> 24 & 255))
+		$((high_bits & 255)) $((high_bits >> 8 & 255))
+		$((high_bits >> 16 & 255)) $((high_bits >> 24 & 255))
+	)
 
-	# encode the full 64bit int (bits length) as little endian
-	local byte
-	for ((i = 0; i < 4; i++)); do
-		byte=$(( low_bits >> (i * 8) & 0xff ))
-		debug "low_bits[$i]=$byte"
-		process-byte "$byte"
+	for ((o=0; o<${#buffer[@]}; o+=64)); do
+		load-buffer-block "$o"
 	done
-	for ((i = 0; i < 4; i++)); do
-		byte=$(( high_bits >> (i * 8) & 0xff ))
-		debug "high_bits[$i]=$byte"
-		process-byte "$byte"
-	done
-
-	# assert things are correct
-	if (( ${#block[@]} != 0 )); then
-		echo 'uh oh! something went wrong' >&2
-		exit 1
-	fi
-}
-
-debug() {
-	if [[ -n $DEBUG ]]; then
-		echo '[DEBUG]' "$@" >&2
-	fi
-	return 0
 }
 
 print-hash() {
-	# somehow print a0 + b0 + c0 + d0
-	debug "a0=$a0 b0=$b0 c0=$c0 d0=$d0"
-
-	local word i byte
-	for word in "$a0" "$b0" "$c0" "$d0"; do
-		for ((i = 0; i < 4; i++)); do
-			byte=$(( word >> (i * 8) & 0xff ))
-			printf '%02x' "$byte"
-		done
-	done
-	echo
+	printf '%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n' \
+		$((a0 & 255)) $((a0 >> 8 & 255)) $((a0 >> 16 & 255)) $((a0 >> 24 & 255)) \
+		$((b0 & 255)) $((b0 >> 8 & 255)) $((b0 >> 16 & 255)) $((b0 >> 24 & 255)) \
+		$((c0 & 255)) $((c0 >> 8 & 255)) $((c0 >> 16 & 255)) $((c0 >> 24 & 255)) \
+		$((d0 & 255)) $((d0 >> 8 & 255)) $((d0 >> 16 & 255)) $((d0 >> 24 & 255))
 }
 
 main() {
-	local file=$1
-
-	if [[ -n $file ]]; then
-		debug "reading data from file: $file"
-		process-input < "$file" || return 1
+	if [[ -n $1 ]]; then
+		debug "reading data from file: $1"
+		process-input < "$1" || return 1
 	else
-		debug "reading data from stdin"
+		debug 'reading data from stdin'
 		process-input
 	fi
-
 	print-hash
 }
 

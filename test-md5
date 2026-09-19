@@ -7,18 +7,48 @@ declare -A files=(
 )
 
 code=0
-for file in "${!files[@]}"; do
-	want=${files[$file]}
+
+check() {
+	local file=$1 want=$2 label=${3:-$1} have
 	have=$(./md5 "$file")
 
-	echo -n "checking $file is $want... "
-
-	if [[ "$want" == "$have" ]]; then
+	printf 'checking %s is %s... ' "$label" "$want"
+	if [[ $want == "$have" ]]; then
 		echo 'ok'
 	else
 		echo "fail! we have '$have'"
 		code=1
 	fi
+}
+
+for file in "${!files[@]}"; do
+	check "$file" "${files[$file]}"
 done
+
+declare -A lengths=(
+	[55]=ef1772b6dff9a122358552954ad0df65
+	[56]=3b0c8ac703f828b04c6c197006d17218
+	[63]=b06521f39153d618550606be297466d5
+	[64]=014842d480b571495a4a0363793f7367
+	[65]=c743a45e0d2e6a95cb859adae0248435
+	[4095]=559110baa849c7608ee70abe1d76273e
+	[4096]=21a199c53f422a380e20b162fb6ebe9c
+	[4097]=8cfc1a0bd8cd76599e76e5e721c6e62e
+)
+
+tmp=${TMPDIR:-/tmp}/bash-md5-test-$$
+trap 'rm -f "$tmp"' EXIT
+for n in "${!lengths[@]}"; do
+	printf -v data '%*s' "$n" ''
+	printf '%s' "${data// /a}" > "$tmp"
+	check "$tmp" "${lengths[$n]}" "generated-$n-bytes"
+done
+
+printf '\0' > "$tmp"
+check "$tmp" 93b885adfe0da089cdf634904fd59f71 single-nul
+printf '\0\0' > "$tmp"
+check "$tmp" c4103f122d27677c9db144cae1394a66 double-nul
+printf 'a\0b\0c' > "$tmp"
+check "$tmp" ed4b9e8bfe6c7571a700dc6a0b0d01cb embedded-nuls
 
 exit "$code"

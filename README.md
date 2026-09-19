@@ -1,7 +1,13 @@
 md5 Implemented in Bash
 =======================
 
-Pure bash implementation of the md5 checksum algorithm
+Pure Bash implementation of the MD5 checksum algorithm. The hash is computed
+entirely with Bash builtins; the implementation does not invoke external
+utilities.
+
+The hot path bulk-decodes input, stores message words in scalar variables, and
+evaluates all 64 MD5 rounds as one fully unrolled arithmetic command. This is
+intentionally optimized for throughput rather than readability.
 
 Usage
 ----
